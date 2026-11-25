@@ -1,0 +1,152 @@
+# Lumax Neural Global Illumination Baker — Single Source of Truth Config
+# Runs seamlessly on an 8GB CUDA GPU, CPU laptop, or headlessly on Google Colab.
+
+runtime:
+  device: auto              # auto | cuda | cpu | mps
+  seed: 42
+  output_dir: outputs
+
+scene:
+  # Procedural Cornell Box centered at origin in [-half_size, +half_size]^3
+  half_size: 1.0
+  open_front: true          # Open +Z face so cameras can inspect the box cleanly
+  albedos:
+    floor: [0.74, 0.74, 0.72]
+    ceiling: [0.76, 0.76, 0.76]
+    back: [0.74, 0.74, 0.74]
+    left: [0.80, 0.12, 0.10]      # Vibrant Cornell red
+    right: [0.12, 0.70, 0.18]     # Vibrant Cornell green
+    front: [0.74, 0.74, 0.74]
+  # Interior occluder wall creating crisp indirect shadow & color-bleed boundaries
+  occluder_wall:
+    enabled: true
+    center: [0.0, -0.32, -0.05]
+    half_extents: [0.06, 0.68, 0.52]
+    albedo: [0.76, 0.75, 0.73]
+  # Movable point light parameters
+  light:
+    color: [1.0, 0.96, 0.90]
+    intensity: 6.5
+    soft_radius: 0.16             # Softens 1/(d^2 + r^2) singularity for clean GI
+    bounds_min: [-0.82, -0.25, -0.82]
+    bounds_max: [0.82, 0.85, 0.75]
+    wall_margin: 0.12             # Keep sampled lights clear of occluder surfaces
+
+sampler:
+  # Stage 1: Indirect-only multi-bounce path-traced dataset generation
+  num_samples: 120000
+  val_fraction: 0.10
+  spp: 64                         # Cosine hemisphere rays per sample point
+  max_bounces: 3                  # Multi-bounce indirect depth (1..N)
+  ray_batch_size: 32768           # Tuned for 8GB VRAM safety; auto-chunks seamlessly
+  russian_roulette_bounce: 2
+  dataset_path: outputs/dataset.pt
+
+model:
+  # Stage 2: Swappable spatial encoder + intentionally overfitted micro-MLP
+  encoder:
+    type: positional              # positional | fourier | identity | chunked_grid
+    include_input: true
+    # Positional (NeRF-style dyadic sin/cos) settings:
+    num_bands_pos: 4              # High spatial frequency for sharp occluder creases
+    num_bands_normal: 0           # Raw normal (3D) is typically optimal & cheap
+    num_bands_light: 2            # Smooth light-position response
+    # Fourier (random Gaussian sin/cos) settings:
+    fourier_features: 24          # Total (sin, cos) pairs -> 2 * fourier_features dims
+    fourier_sigma_pos: 2.2
+    fourier_sigma_normal: 0.5
+    fourier_sigma_light: 1.0
+    # Future architectural hook: jointly trained chunked 3D feature grid + shared decoder
+    chunked_grid:
+      chunk_count: [2, 2, 2]
+      chunk_resolution: [4, 4, 4]
+      feature_dim: 8
+  mlp:
+    hidden_layers: 3              # 2-3 hidden layers
+    hidden_dim: 32                # 16-32 neurons (kilobyte-scale VRAM)
+    activation: relu              # relu | leaky_relu | silu | sin
+    target_transform: log1p       # log1p | linear (log1p boosts dark shadow precision)
+
+train:
+  epochs: 120
+  batch_size: 4096
+  lr: 0.005
+  min_lr: 0.0001
+  weight_decay: 0.0               # Intentional overfitting: zero weight decay by default
+  loss: l1                        # l1 | l2 | huber | relative_l2
+  log_every: 10
+  checkpoint_path: outputs/checkpoints/best.pt
+
+eval:
+  # Stage 3: Unseen viewpoints & light positions visual + quantitative evaluation
+  width: 256
+  height: 256
+  gt_spp: 96
+  max_bounces: 3
+  ray_batch_size: 32768
+  render_mode: indirect_radiance  # indirect_radiance (albedo * I_ind) | irradiance (I_ind)
+  exposure: 1.6
+  error_scale: 4.0                # Amplifies absolute RGB error for clear heatmap visibility
+  output_dir: outputs/eval
+  test_cases:
+    - name: red_bleed_front
+      eye: [0.0, 0.05, 2.35]
+      target: [0.0, -0.05, -0.2]
+      fov_deg: 48.0
+      light_pos: [-0.58, 0.55, -0.15]
+    - name: green_bleed_angled
+      eye: [-0.72, 0.28, 2.15]
+      target: [0.10, -0.10, -0.20]
+      fov_deg: 50.0
+      light_pos: [0.60, 0.45, 0.05]
+    - name: low_occluder_shadow
+      eye: [0.68, 0.32, 2.10]
+      target: [-0.08, -0.18, -0.15]
+      fov_deg: 50.0
+      light_pos: [-0.62, -0.05, -0.25]
+    - name: high_center_bounce
+      eye: [0.22, -0.22, 2.25]
+      target: [0.0, 0.05, -0.25]
+      fov_deg: 48.0
+      light_pos: [0.18, 0.78, -0.45]
+
+sweep:
+  # Automated sharpness vs footprint sweep
+  output_dir: outputs/sweep
+  epochs: 80
+  eval_width: 192
+  eval_height: 192
+  gt_spp: 64
+  variants:
+    - name: pos3_2x16
+      model:
+        encoder: {type: positional, num_bands_pos: 3, num_bands_light: 2}
+        mlp: {hidden_layers: 2, hidden_dim: 16, activation: relu}
+    - name: pos4_3x16
+      model:
+        encoder: {type: positional, num_bands_pos: 4, num_bands_light: 2}
+        mlp: {hidden_layers: 3, hidden_dim: 16, activation: relu}
+    - name: pos4_3x32
+      model:
+        encoder: {type: positional, num_bands_pos: 4, num_bands_light: 2}
+        mlp: {hidden_layers: 3, hidden_dim: 32, activation: relu}
+    - name: pos6_3x32
+      model:
+        encoder: {type: positional, num_bands_pos: 6, num_bands_light: 2}
+        mlp: {hidden_layers: 3, hidden_dim: 32, activation: relu}
+    - name: fourier24_3x32
+      model:
+        encoder: {type: fourier, fourier_features: 24, fourier_sigma_pos: 2.2}
+        mlp: {hidden_layers: 3, hidden_dim: 32, activation: relu}
+
+export:
+  # Stage 4: Compact binary (.lmx) + self-contained Godot 4 GLSL (.gdshaderinc)
+  binary_path: outputs/export/lumax_gi.lmx
+  shader_include_path: outputs/export/lumax_gi.gdshaderinc
+  example_shader_path: outputs/export/lumax_example.gdshader
+  quantize_fp16: true
+  uniform_defaults:
+    bounce_strength: 1.0
+    vibrancy: 1.0
+    warmth: 0.0
+    shadow_lift: 0.0

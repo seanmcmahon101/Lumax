@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lumax"
+version = "0.1.0"
+description = "Hardware-agnostic Neural Global Illumination baker with kilobyte-scale micro-MLPs and Godot 4 GLSL export"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1.0",
+    "numpy>=1.24.0",
+    "pyyaml>=6.0",
+    "pillow>=10.0.0",
+]
+
+[project.scripts]
+lumax = "lumax.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["lumax*"]

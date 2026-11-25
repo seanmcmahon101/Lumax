@@ -1,0 +1,8 @@
+# Minimal runtime dependencies for Lumax Neural GI Baker.
+# On an 8GB CUDA GPU locally, install CUDA-enabled PyTorch first, e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+# On Google Colab, CUDA PyTorch is pre-installed.
+torch>=2.1.0
+numpy>=1.24.0
+pyyaml>=6.0
+pillow>=10.0.0
